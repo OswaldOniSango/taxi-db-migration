@@ -1,0 +1,9 @@
+CREATE OR REPLACE FUNCTION NUM_RUNNING_TASKS(curr_schema VARCHAR)
+    RETURNS NUMBER
+AS
+$$
+    SELECT count(*)
+    FROM TABLE(INFORMATION_SCHEMA.TASK_HISTORY())
+    WHERE schema_name = curr_schema AND state = 'EXECUTING'
+$$
+;
