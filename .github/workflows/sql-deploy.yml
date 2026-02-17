@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       COMMAND:
-        description: 'Flyway command (migrate, repair, clean)'
+        description: "Flyway command (migrate, repair, clean)"
         required: true
-        default: 'migrate'
+        default: "migrate"
         type: choice
         options: [migrate, repair, clean]
   pull_request:
@@ -52,6 +52,10 @@ jobs:
           SNOW_ROLE="DEV_DEPLOY_ROLE"
           SNOWSQL_USR="GHA_DEPLOY_USER"
 
+          # Parquet demo file
+          PARQUET_FILE="yellow_tripdata_2025-01.parquet"
+          PARQUET_URL="https://d37ci6vzurychx.cloudfront.net/trip-data/${PARQUET_FILE}"
+
           echo "COMMAND=$CMD" >> $GITHUB_OUTPUT
           echo "SNOW_ACCOUNT=$SNOW_ACCOUNT" >> $GITHUB_OUTPUT
           echo "SNOW_DB=$SNOW_DB" >> $GITHUB_OUTPUT
@@ -59,6 +63,8 @@ jobs:
           echo "SNOW_WH=$SNOW_WH" >> $GITHUB_OUTPUT
           echo "SNOW_ROLE=$SNOW_ROLE" >> $GITHUB_OUTPUT
           echo "SNOWSQL_USR=$SNOWSQL_USR" >> $GITHUB_OUTPUT
+          echo "PARQUET_FILE=$PARQUET_FILE" >> $GITHUB_OUTPUT
+          echo "PARQUET_URL=$PARQUET_URL" >> $GITHUB_OUTPUT
 
       - name: Install Flyway CLI
         run: |
@@ -83,7 +89,7 @@ jobs:
           flyway.schemas=${{ steps.vars.outputs.SNOW_SCHEMA }}
           flyway.createSchemas=true
           flyway.cleanDisabled=false
-          
+
           flyway.placeholders.schema=${{ steps.vars.outputs.SNOW_SCHEMA }}
           EOF
 
@@ -97,8 +103,145 @@ jobs:
 
       - name: Run Flyway Command
         run: |
+          set -euo pipefail
           echo "[INFO] Running Flyway command: ${{ steps.vars.outputs.COMMAND }} on schema: ${{ steps.vars.outputs.SNOW_SCHEMA }}"
           flyway \
             -configFiles=config/env.conf \
             -locations=filesystem:before-migrate,filesystem:after-migrate,filesystem:migrate \
             ${{ steps.vars.outputs.COMMAND }}
+
+      - name: Install SnowSQL
+        run: |
+          set -euo pipefail
+          curl -L -o snowsql.bash "https://sfc-repo.snowflakecomputing.com/snowsql/bootstrap/1.2/linux_x86_64/snowsql.bash"
+          bash snowsql.bash
+          ~/bin/snowsql -v
+
+      - name: Download Yellow Taxi Parquet (demo file)
+        run: |
+          set -euo pipefail
+          mkdir -p data
+          curl -fL --retry 3 --retry-delay 2 -o "data/${{ steps.vars.outputs.PARQUET_FILE }}" \
+            "${{ steps.vars.outputs.PARQUET_URL }}"
+          ls -lh "data/${{ steps.vars.outputs.PARQUET_FILE }}"
+
+      - name: PUT parquet to Snowflake stage
+        env:
+          SNOWSQL_PWD: ${{ secrets.SNOWSQL_PWD }}
+        run: |
+          set -euo pipefail
+
+          FILE="${{ steps.vars.outputs.PARQUET_FILE }}"
+          LOCAL_PATH="$GITHUB_WORKSPACE/data/${FILE}"
+          STAGE_FQ="${{ steps.vars.outputs.SNOW_DB }}.${{ steps.vars.outputs.SNOW_SCHEMA }}.PARQUET_STAGE"
+
+          ~/bin/snowsql \
+            -a "${{ steps.vars.outputs.SNOW_ACCOUNT }}" \
+            -u "${{ steps.vars.outputs.SNOWSQL_USR }}" \
+            -p "${SNOWSQL_PWD}" \
+            -r "${{ steps.vars.outputs.SNOW_ROLE }}" \
+            -w "${{ steps.vars.outputs.SNOW_WH }}" \
+            -d "${{ steps.vars.outputs.SNOW_DB }}" \
+            -s "${{ steps.vars.outputs.SNOW_SCHEMA }}" \
+            -q "PUT 'file://${LOCAL_PATH}' @${STAGE_FQ} AUTO_COMPRESS=FALSE OVERWRITE=TRUE;"
+
+      - name: Verify stage upload
+        env:
+          SNOWSQL_PWD: ${{ secrets.SNOWSQL_PWD }}
+        run: |
+          set -euo pipefail
+          STAGE_FQ="${{ steps.vars.outputs.SNOW_DB }}.${{ steps.vars.outputs.SNOW_SCHEMA }}.PARQUET_STAGE"
+
+          ~/bin/snowsql \
+            -a "${{ steps.vars.outputs.SNOW_ACCOUNT }}" \
+            -u "${{ steps.vars.outputs.SNOWSQL_USR }}" \
+            -p "${SNOWSQL_PWD}" \
+            -r "${{ steps.vars.outputs.SNOW_ROLE }}" \
+            -w "${{ steps.vars.outputs.SNOW_WH }}" \
+            -d "${{ steps.vars.outputs.SNOW_DB }}" \
+            -s "${{ steps.vars.outputs.SNOW_SCHEMA }}" \
+            -q "LIST @${STAGE_FQ};"
+
+      - name: Load parquet into TRAVEL_RAW (COPY INTO)
+        env:
+          SNOWSQL_PWD: ${{ secrets.SNOWSQL_PWD }}
+        run: |
+          set -euo pipefail
+
+          FILE="${{ steps.vars.outputs.PARQUET_FILE }}"
+          SQL=$(cat <<EOSQL
+          COPY INTO DEV_DB.TAXI.TRAVEL_RAW (
+          VENDOR_ID,
+          TPEP_PICKUP_DATETIME,
+          TPEP_DROPOFF_DATETIME,
+          PASSENGER_COUNT,
+          TRIP_DISTANCE,
+          RATE_CODE_ID,
+          STORE_AND_FWD_FLAG,
+          PU_LOCATION_ID,
+          DO_LOCATION_ID,
+          PAYMENT_TYPE,
+          FARE_AMOUNT,
+          EXTRA,
+          MTA_TAX,
+          TIP_AMOUNT,
+          TOLLS_AMOUNT,
+          IMPROVEMENT_SURCHARGE,
+          TOTAL_AMOUNT,
+          CONGESTION_SURCHARGE,
+          AIRPORT_FEE,
+          CBD_CONGESTION_FEE
+          )
+          FROM (
+          SELECT
+          \$1:VendorID::NUMBER(38,0),
+          TO_TIMESTAMP_TZ(\$1:tpep_pickup_datetime::NUMBER, 6),
+          TO_TIMESTAMP_TZ(\$1:tpep_dropoff_datetime::NUMBER, 6),
+          \$1:passenger_count::NUMBER(38,0),
+          \$1:trip_distance::NUMBER(38,0),
+          \$1:RatecodeID::NUMBER(38,0),
+          \$1:store_and_fwd_flag::VARCHAR(20),
+          \$1:PULocationID::NUMBER(38,0),
+          \$1:DOLocationID::NUMBER(38,0),
+          \$1:payment_type::NUMBER(38,0),
+          \$1:fare_amount::NUMBER(38,0),
+          \$1:extra::NUMBER(38,0),
+          \$1:mta_tax::NUMBER(38,0),
+          \$1:tip_amount::NUMBER(38,0),
+          \$1:tolls_amount::NUMBER(38,0),
+          \$1:improvement_surcharge::NUMBER(38,0),
+          \$1:total_amount::NUMBER(38,0),
+          \$1:congestion_surcharge::NUMBER(38,0),
+          \$1:Airport_fee::NUMBER(38,0),
+          \$1:cbd_congestion_fee::NUMBER(38,0)
+          FROM @DEV_DB.TAXI.PARQUET_STAGE/\${FILE}
+          )
+          FILE_FORMAT = (TYPE = PARQUET)
+          ON_ERROR = 'ABORT_STATEMENT';
+          EOSQL
+          )
+          
+          ~/bin/snowsql \
+          -a "${{ steps.vars.outputs.SNOW_ACCOUNT }}" \
+          -u "${{ steps.vars.outputs.SNOWSQL_USR }}" \
+          -p "${SNOWSQL_PWD}" \
+          -r "${{ steps.vars.outputs.SNOW_ROLE }}" \
+          -w "${{ steps.vars.outputs.SNOW_WH }}" \
+          -d "${{ steps.vars.outputs.SNOW_DB }}" \
+          -s "${{ steps.vars.outputs.SNOW_SCHEMA }}" \
+          -q "$SQL"
+
+      - name: Verify TRAVEL_RAW load
+        env:
+          SNOWSQL_PWD: ${{ secrets.SNOWSQL_PWD }}
+        run: |
+          set -euo pipefail
+          ~/bin/snowsql \
+            -a "${{ steps.vars.outputs.SNOW_ACCOUNT }}" \
+            -u "${{ steps.vars.outputs.SNOWSQL_USR }}" \
+            -p "${SNOWSQL_PWD}" \
+            -r "${{ steps.vars.outputs.SNOW_ROLE }}" \
+            -w "${{ steps.vars.outputs.SNOW_WH }}" \
+            -d "${{ steps.vars.outputs.SNOW_DB }}" \
+            -s "${{ steps.vars.outputs.SNOW_SCHEMA }}" \
+            -q "SELECT COUNT(*) AS ROWS_IN_TRAVEL_RAW FROM DEV_DB.TAXI.TRAVEL_RAW;"
