@@ -1,0 +1,104 @@
+name: Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      COMMAND:
+        description: 'Flyway command (migrate, repair, clean)'
+        required: true
+        default: 'migrate'
+        type: choice
+        options: [migrate, repair, clean]
+  pull_request:
+    types: [closed]
+    branches: [main]
+
+env:
+  MAVEN_OPTS: "-Xmx512m -Xms128m -Xss2m"
+  _JAVA_OPTIONS: "--add-opens=java.base/java.nio=ALL-UNNAMED"
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set branch and formatted variables
+        id: vars
+        env:
+          COMMAND: ${{ github.event.inputs.COMMAND }}
+        run: |
+          set -euo pipefail
+
+          # Command
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            CMD="${COMMAND:-migrate}"
+          else
+            CMD="migrate"
+          fi
+
+          # Snowflake targets
+          SNOW_ACCOUNT="BGVPESB-AP66648"
+          SNOW_DB="DEV_DB"
+          SNOW_SCHEMA="TAXI"
+          SNOW_WH="DEV_WH"
+          SNOW_ROLE="DEV_DEPLOY_ROLE"
+          SNOWSQL_USR="GHA_DEPLOY_USER"
+
+          echo "COMMAND=$CMD" >> $GITHUB_OUTPUT
+          echo "SNOW_ACCOUNT=$SNOW_ACCOUNT" >> $GITHUB_OUTPUT
+          echo "SNOW_DB=$SNOW_DB" >> $GITHUB_OUTPUT
+          echo "SNOW_SCHEMA=$SNOW_SCHEMA" >> $GITHUB_OUTPUT
+          echo "SNOW_WH=$SNOW_WH" >> $GITHUB_OUTPUT
+          echo "SNOW_ROLE=$SNOW_ROLE" >> $GITHUB_OUTPUT
+          echo "SNOWSQL_USR=$SNOWSQL_USR" >> $GITHUB_OUTPUT
+
+      - name: Install Flyway CLI
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y curl tar
+          FLYWAY_VERSION="10.17.0"
+          curl -L -o flyway.tgz "https://repo1.maven.org/maven2/org/flywaydb/flyway-commandline/${FLYWAY_VERSION}/flyway-commandline-${FLYWAY_VERSION}-linux-x64.tar.gz"
+          tar -xzf flyway.tgz
+          sudo mv flyway-${FLYWAY_VERSION} /opt/flyway
+          sudo ln -sf /opt/flyway/flyway /usr/local/bin/flyway
+          flyway -v
+
+      - name: Prepare Flyway Config File (password auth)
+        run: |
+          set -euo pipefail
+          mkdir -p config
+          cat <<EOF > config/env.conf
+          flyway.user=${{ steps.vars.outputs.SNOWSQL_USR }}
+          flyway.password=${{ secrets.SNOWSQL_PWD }}
+          flyway.url=jdbc:snowflake://${{ steps.vars.outputs.SNOW_ACCOUNT }}.snowflakecomputing.com/?db=${{ steps.vars.outputs.SNOW_DB }}&schema=${{ steps.vars.outputs.SNOW_SCHEMA }}&warehouse=${{ steps.vars.outputs.SNOW_WH }}&role=${{ steps.vars.outputs.SNOW_ROLE }}
+          flyway.schemas=${{ steps.vars.outputs.SNOW_SCHEMA }}
+          flyway.createSchemas=true
+          flyway.cleanDisabled=false
+          
+          flyway.placeholders.schema=${{ steps.vars.outputs.SNOW_SCHEMA }}
+          EOF
+
+      - name: Guard clean on protected branches
+        run: |
+          set -euo pipefail
+          if [ "${{ steps.vars.outputs.COMMAND }}" = "clean" ] && [ "${{ github.event_name }}" != "workflow_dispatch" ]; then
+            echo "ERROR: clean is only allowed via workflow_dispatch." >&2
+            exit 1
+          fi
+
+      - name: Run Flyway Command
+        run: |
+          echo "[INFO] Running Flyway command: ${{ steps.vars.outputs.COMMAND }} on schema: ${{ steps.vars.outputs.SNOW_SCHEMA }}"
+          flyway \
+            -configFiles=config/env.conf \
+            -locations=filesystem:before-migrate,filesystem:after-migrate,filesystem:migrate \
+            ${{ steps.vars.outputs.COMMAND }}
