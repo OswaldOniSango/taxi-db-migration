@@ -44,26 +44,22 @@ jobs:
       - name: Install dependencies
         run: |
           apt-get update
-          apt-get install -y curl ca-certificates
+          apt-get install -y curl unzip ca-certificates bash
 
       - name: Download SnowSQL
-        run: |
-          curl -fL -o snowsql.bash \
-            "https://sfc-repo.snowflakecomputing.com/snowsql/bootstrap/1.2/linux_x86_64/snowsql-1.2.23-linux_x86_64.bash"
+        run: curl -O https://sfc-repo.snowflakecomputing.com/snowsql/bootstrap/1.2/linux_x86_64/snowsql-1.2.23-linux_x86_64.bash
 
       - name: Ensure .profile exists
         run: touch ~/.profile
 
       - name: Install SnowSQL
-        run: |
-          SNOWSQL_DEST=~/snowflake SNOWSQL_LOGIN_SHELL=~/.profile bash snowsql.bash
+        run: SNOWSQL_DEST=~/snowflake SNOWSQL_LOGIN_SHELL=~/.profile bash snowsql-1.2.23-linux_x86_64.bash
 
       - name: Ensure schema exists
         run: |
           ~/snowflake/snowsql \
             -a "${SNOWSQL_ACCOUNT}" \
             -u "${SNOWSQL_USR}" \
-            -p "${SNOWSQL_PWD}" \
             -w "${SNOWSQL_WAREHOUSE}" \
             -d "${SNOWSQL_DATABASE}" \
             -s "${SNOWSQL_SCHEMA}" \
@@ -76,7 +72,6 @@ jobs:
           ~/snowflake/snowsql \
             -a "${SNOWSQL_ACCOUNT}" \
             -u "${SNOWSQL_USR}" \
-            -p "${SNOWSQL_PWD}" \
             -w "${SNOWSQL_WAREHOUSE}" \
             -d "${SNOWSQL_DATABASE}" \
             -s "${SNOWSQL_SCHEMA}" \
@@ -102,7 +97,6 @@ jobs:
           ~/snowflake/snowsql \
             -a "${SNOWSQL_ACCOUNT}" \
             -u "${SNOWSQL_USR}" \
-            -p "${SNOWSQL_PWD}" \
             -w "${SNOWSQL_WAREHOUSE}" \
             -d "${SNOWSQL_DATABASE}" \
             -s "${SNOWSQL_SCHEMA}" \
@@ -120,7 +114,6 @@ jobs:
           ~/snowflake/snowsql \
             -a "${SNOWSQL_ACCOUNT}" \
             -u "${SNOWSQL_USR}" \
-            -p "${SNOWSQL_PWD}" \
             -w "${SNOWSQL_WAREHOUSE}" \
             -d "${SNOWSQL_DATABASE}" \
             -s "${SNOWSQL_SCHEMA}" \
@@ -184,7 +177,6 @@ jobs:
           ~/snowflake/snowsql \
             -a "${SNOWSQL_ACCOUNT}" \
             -u "${SNOWSQL_USR}" \
-            -p "${SNOWSQL_PWD}" \
             -w "${SNOWSQL_WAREHOUSE}" \
             -d "${SNOWSQL_DATABASE}" \
             -s "${SNOWSQL_SCHEMA}" \
