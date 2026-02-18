@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       COMMAND:
-        description: 'Flyway command (migrate, repair, clean)'
+        description: "Flyway command (migrate, repair, clean)"
         required: true
-        default: 'migrate'
+        default: "migrate"
         type: choice
         options: [migrate, repair, clean]
   pull_request:
@@ -52,6 +52,10 @@ jobs:
           SNOW_ROLE="DEV_DEPLOY_ROLE"
           SNOWSQL_USR="GHA_DEPLOY_USER"
 
+          # Parquet demo file
+          PARQUET_FILE="yellow_tripdata_2025-01.parquet"
+          PARQUET_URL="https://d37ci6vzurychx.cloudfront.net/trip-data/${PARQUET_FILE}"
+
           echo "COMMAND=$CMD" >> $GITHUB_OUTPUT
           echo "SNOW_ACCOUNT=$SNOW_ACCOUNT" >> $GITHUB_OUTPUT
           echo "SNOW_DB=$SNOW_DB" >> $GITHUB_OUTPUT
@@ -59,6 +63,8 @@ jobs:
           echo "SNOW_WH=$SNOW_WH" >> $GITHUB_OUTPUT
           echo "SNOW_ROLE=$SNOW_ROLE" >> $GITHUB_OUTPUT
           echo "SNOWSQL_USR=$SNOWSQL_USR" >> $GITHUB_OUTPUT
+          echo "PARQUET_FILE=$PARQUET_FILE" >> $GITHUB_OUTPUT
+          echo "PARQUET_URL=$PARQUET_URL" >> $GITHUB_OUTPUT
 
       - name: Install Flyway CLI
         run: |
@@ -83,7 +89,7 @@ jobs:
           flyway.schemas=${{ steps.vars.outputs.SNOW_SCHEMA }}
           flyway.createSchemas=true
           flyway.cleanDisabled=false
-          
+
           flyway.placeholders.schema=${{ steps.vars.outputs.SNOW_SCHEMA }}
           EOF
 
@@ -97,6 +103,7 @@ jobs:
 
       - name: Run Flyway Command
         run: |
+          set -euo pipefail
           echo "[INFO] Running Flyway command: ${{ steps.vars.outputs.COMMAND }} on schema: ${{ steps.vars.outputs.SNOW_SCHEMA }}"
           flyway \
             -configFiles=config/env.conf \
