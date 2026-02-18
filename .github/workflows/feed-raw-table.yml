@@ -60,7 +60,6 @@ jobs:
           ~/snowflake/snowsql \
             -a "${SNOWSQL_ACCOUNT}" \
             -u "${SNOWSQL_USR}" \
-            -p "${SNOWSQL_PWD}" \
             -w "${SNOWSQL_WAREHOUSE}" \
             -d "${SNOWSQL_DATABASE}" \
             -s "${SNOWSQL_SCHEMA}" \
@@ -73,7 +72,6 @@ jobs:
           ~/snowflake/snowsql \
             -a "${SNOWSQL_ACCOUNT}" \
             -u "${SNOWSQL_USR}" \
-            -p "${SNOWSQL_PWD}" \
             -w "${SNOWSQL_WAREHOUSE}" \
             -d "${SNOWSQL_DATABASE}" \
             -s "${SNOWSQL_SCHEMA}" \
@@ -99,7 +97,6 @@ jobs:
           ~/snowflake/snowsql \
             -a "${SNOWSQL_ACCOUNT}" \
             -u "${SNOWSQL_USR}" \
-            -p "${SNOWSQL_PWD}" \
             -w "${SNOWSQL_WAREHOUSE}" \
             -d "${SNOWSQL_DATABASE}" \
             -s "${SNOWSQL_SCHEMA}" \
@@ -117,7 +114,6 @@ jobs:
           ~/snowflake/snowsql \
             -a "${SNOWSQL_ACCOUNT}" \
             -u "${SNOWSQL_USR}" \
-            -p "${SNOWSQL_PWD}" \
             -w "${SNOWSQL_WAREHOUSE}" \
             -d "${SNOWSQL_DATABASE}" \
             -s "${SNOWSQL_SCHEMA}" \
@@ -181,7 +177,6 @@ jobs:
           ~/snowflake/snowsql \
             -a "${SNOWSQL_ACCOUNT}" \
             -u "${SNOWSQL_USR}" \
-            -p "${SNOWSQL_PWD}" \
             -w "${SNOWSQL_WAREHOUSE}" \
             -d "${SNOWSQL_DATABASE}" \
             -s "${SNOWSQL_SCHEMA}" \
