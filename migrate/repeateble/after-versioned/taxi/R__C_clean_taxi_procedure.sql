@@ -256,5 +256,9 @@ BEGIN
     'updated_estimate', v_rows_updated
   );
 
+  DROP TEMPORARY TABLE IF EXISTS taxi_output_enriched;
+  DROP TEMPORARY TABLE IF EXISTS taxi_stream;
+
+
 END;
 $$;
