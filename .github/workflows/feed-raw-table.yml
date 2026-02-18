@@ -1,0 +1,185 @@
+# .github/workflows/taxi-seed.yml
+name: Taxi Seed (PUT + COPY)
+
+on:
+  workflow_dispatch:
+    inputs:
+      PARQUET_FILE:
+        description: "Parquet file name to download and load"
+        required: true
+        default: "yellow_tripdata_2025-01.parquet"
+      DO_COPY:
+        description: "Run COPY INTO TRAVEL_RAW after PUT"
+        required: true
+        default: "true"
+        type: choice
+        options: ["true", "false"]
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  taxi_seed:
+    runs-on: ubuntu-22.04
+    container:
+      image: ubuntu:22.04
+
+    env:
+      # Snowflake
+      SNOWSQL_USR: "GHA_DEPLOY_USER"
+      SNOWSQL_PWD: ${{ secrets.SNOWSQL_PWD }}
+      SNOWSQL_ACCOUNT: "BGVPESB-AP66648"
+      SNOWSQL_ROLE: "DEV_DEPLOY_ROLE"
+      SNOWSQL_WAREHOUSE: "DEV_WH"
+      SNOWSQL_DATABASE: "DEV_DB"
+      SNOWSQL_SCHEMA: "TAXI"
+
+      # Stages
+      PARQUET_STAGE_NAME: "PARQUET_STAGE"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          apt-get update
+          apt-get install -y curl unzip ca-certificates bash
+
+      - name: Download SnowSQL
+        run: curl -O https://sfc-repo.snowflakecomputing.com/snowsql/bootstrap/1.2/linux_x86_64/snowsql-1.2.23-linux_x86_64.bash
+
+      - name: Ensure .profile exists
+        run: touch ~/.profile
+
+      - name: Install SnowSQL
+        run: SNOWSQL_DEST=~/snowflake SNOWSQL_LOGIN_SHELL=~/.profile bash snowsql-1.2.23-linux_x86_64.bash
+
+      - name: Ensure schema exists
+        run: |
+          ~/snowflake/snowsql \
+            -a "${SNOWSQL_ACCOUNT}" \
+            -u "${SNOWSQL_USR}" \
+            -w "${SNOWSQL_WAREHOUSE}" \
+            -d "${SNOWSQL_DATABASE}" \
+            -s "${SNOWSQL_SCHEMA}" \
+            -r "${SNOWSQL_ROLE}" \
+            -o variable_substitution=true \
+            -q "CREATE SCHEMA IF NOT EXISTS ${SNOWSQL_DATABASE}.${SNOWSQL_SCHEMA};"
+
+      - name: Ensure parquet stage exists
+        run: |
+          ~/snowflake/snowsql \
+            -a "${SNOWSQL_ACCOUNT}" \
+            -u "${SNOWSQL_USR}" \
+            -w "${SNOWSQL_WAREHOUSE}" \
+            -d "${SNOWSQL_DATABASE}" \
+            -s "${SNOWSQL_SCHEMA}" \
+            -r "${SNOWSQL_ROLE}" \
+            -o variable_substitution=true \
+            -q "CREATE STAGE IF NOT EXISTS ${SNOWSQL_DATABASE}.${SNOWSQL_SCHEMA}.${PARQUET_STAGE_NAME};"
+
+      - name: Download parquet from web
+        env:
+          PARQUET_FILE: ${{ github.event.inputs.PARQUET_FILE }}
+        run: |
+          set -euo pipefail
+          mkdir -p data
+          URL="https://d37ci6vzurychx.cloudfront.net/trip-data/${PARQUET_FILE}"
+          curl -fL --retry 3 --retry-delay 2 -o "data/${PARQUET_FILE}" "${URL}"
+          ls -lh "data/${PARQUET_FILE}"
+
+      - name: PUT parquet to stage
+        env:
+          PARQUET_FILE: ${{ github.event.inputs.PARQUET_FILE }}
+        run: |
+          set -euo pipefail
+          ~/snowflake/snowsql \
+            -a "${SNOWSQL_ACCOUNT}" \
+            -u "${SNOWSQL_USR}" \
+            -w "${SNOWSQL_WAREHOUSE}" \
+            -d "${SNOWSQL_DATABASE}" \
+            -s "${SNOWSQL_SCHEMA}" \
+            -r "${SNOWSQL_ROLE}" \
+            -o variable_substitution=true \
+            -q "PUT file://data/${PARQUET_FILE} @${SNOWSQL_DATABASE}.${SNOWSQL_SCHEMA}.${PARQUET_STAGE_NAME} auto_compress=false overwrite=true;"
+
+      - name: COPY INTO TRAVEL_RAW
+        if: ${{ github.event.inputs.DO_COPY == 'true' }}
+        env:
+          PARQUET_FILE: ${{ github.event.inputs.PARQUET_FILE }}
+        run: |
+          set -euo pipefail
+
+          ~/snowflake/snowsql \
+            -a "${SNOWSQL_ACCOUNT}" \
+            -u "${SNOWSQL_USR}" \
+            -w "${SNOWSQL_WAREHOUSE}" \
+            -d "${SNOWSQL_DATABASE}" \
+            -s "${SNOWSQL_SCHEMA}" \
+            -r "${SNOWSQL_ROLE}" \
+            -o variable_substitution=true \
+            -q "
+            COPY INTO ${SNOWSQL_DATABASE}.${SNOWSQL_SCHEMA}.TRAVEL_RAW (
+            VENDOR_ID,
+            TPEP_PICKUP_DATETIME,
+            TPEP_DROPOFF_DATETIME,
+            PASSENGER_COUNT,
+            TRIP_DISTANCE,
+            RATE_CODE_ID,
+            STORE_AND_FWD_FLAG,
+            PU_LOCATION_ID,
+            DO_LOCATION_ID,
+            PAYMENT_TYPE,
+            FARE_AMOUNT,
+            EXTRA,
+            MTA_TAX,
+            TIP_AMOUNT,
+            TOLLS_AMOUNT,
+            IMPROVEMENT_SURCHARGE,
+            TOTAL_AMOUNT,
+            CONGESTION_SURCHARGE,
+            AIRPORT_FEE,
+            CBD_CONGESTION_FEE
+            )
+            FROM (
+            SELECT
+            \$1:VendorID::NUMBER(38,0),
+            TO_TIMESTAMP_TZ(\$1:tpep_pickup_datetime::NUMBER, 6),
+            TO_TIMESTAMP_TZ(\$1:tpep_dropoff_datetime::NUMBER, 6),
+            \$1:passenger_count::NUMBER(38,0),
+            \$1:trip_distance::NUMBER(38,0),
+            \$1:RatecodeID::NUMBER(38,0),
+            \$1:store_and_fwd_flag::VARCHAR(20),
+            \$1:PULocationID::NUMBER(38,0),
+            \$1:DOLocationID::NUMBER(38,0),
+            \$1:payment_type::NUMBER(38,0),
+            \$1:fare_amount::NUMBER(38,0),
+            \$1:extra::NUMBER(38,0),
+            \$1:mta_tax::NUMBER(38,0),
+            \$1:tip_amount::NUMBER(38,0),
+            \$1:tolls_amount::NUMBER(38,0),
+            \$1:improvement_surcharge::NUMBER(38,0),
+            \$1:total_amount::NUMBER(38,0),
+            \$1:congestion_surcharge::NUMBER(38,0),
+            \$1:Airport_fee::NUMBER(38,0),
+            \$1:cbd_congestion_fee::NUMBER(38,0)
+            FROM @${SNOWSQL_DATABASE}.${SNOWSQL_SCHEMA}.${PARQUET_STAGE_NAME}/${PARQUET_FILE}
+            )
+            FILE_FORMAT = (TYPE = PARQUET)
+            ON_ERROR = 'ABORT_STATEMENT';
+            "
+
+      - name: Verify rows
+        if: ${{ github.event.inputs.DO_COPY == 'true' }}
+        run: |
+          set -euo pipefail
+          ~/snowflake/snowsql \
+            -a "${SNOWSQL_ACCOUNT}" \
+            -u "${SNOWSQL_USR}" \
+            -w "${SNOWSQL_WAREHOUSE}" \
+            -d "${SNOWSQL_DATABASE}" \
+            -s "${SNOWSQL_SCHEMA}" \
+            -r "${SNOWSQL_ROLE}" \
+            -o variable_substitution=true \
+            -q "SELECT COUNT(*) AS ROWS_IN_TRAVEL_RAW FROM ${SNOWSQL_DATABASE}.${SNOWSQL_SCHEMA}.TRAVEL_RAW;"
